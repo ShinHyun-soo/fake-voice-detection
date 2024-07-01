@@ -1,65 +1,29 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# # Imports
-
-# In[ ]:
-
-
+# Imports
 import librosa
-
 from sklearn.model_selection import train_test_split
 import numpy as np
 import pandas as pd
 import random
-
-from torch import nn
-import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
-from tqdm import tqdm
-
-import torch
-import torchmetrics
 import os
+import torch
+from tqdm import tqdm
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, Trainer, TrainingArguments
+from datasets import Dataset
 
-
-# In[ ]:
-
-
-import warnings
-warnings.filterwarnings('ignore')
-
-
-# In[ ]:
-
-
-device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-
-
-# # Config
-
-# In[ ]:
-
-
+# Config
 class Config:
     SR = 32000
     N_MFCC = 13
-    # Dataset
     ROOT_FOLDER = './'
-    # Training
     N_CLASSES = 2
     BATCH_SIZE = 96
     N_EPOCHS = 5
     LR = 3e-4
-    # Others
     SEED = 42
-    
+
 CONFIG = Config()
 
-
-# In[ ]:
-
-
+# Seed setting
 def seed_everything(seed):
     random.seed(seed)
     os.environ['PYTHONHASHSEED'] = str(seed)
@@ -69,253 +33,74 @@ def seed_everything(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = True
 
-seed_everything(CONFIG.SEED) # Seed 고정
+seed_everything(CONFIG.SEED)
 
-
-# In[ ]:
-
-
+# Load data
 df = pd.read_csv('./train.csv')
+test = pd.read_csv('./test.csv')
 train, val, _, _ = train_test_split(df, df['label'], test_size=0.2, random_state=CONFIG.SEED)
 
-
-# ## Data Pre-processing : MFCC
-
-# In[ ]:
-
-
-def get_mfcc_feature(df, train_mode=True):
-    features = []
-    labels = []
+# Preprocess data
+def preprocess_data(df):
+    features, labels = [], []
     for _, row in tqdm(df.iterrows()):
-        # librosa패키지를 사용하여 wav 파일 load
         y, sr = librosa.load(row['path'], sr=CONFIG.SR)
-        
-        # librosa패키지를 사용하여 mfcc 추출
         mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=CONFIG.N_MFCC)
         mfcc = np.mean(mfcc.T, axis=0)
-        features.append(mfcc)
+        features.append(mfcc.tolist())
+        labels.append(0 if row['label'] == 'fake' else 1)
+    return {'features': features, 'labels': labels}
 
-        if train_mode:
-            label = row['label']
-            label_vector = np.zeros(CONFIG.N_CLASSES, dtype=float)
-            label_vector[0 if label == 'fake' else 1] = 1
-            labels.append(label_vector)
+train_data = preprocess_data(train)
+val_data = preprocess_data(val)
+test_data = preprocess_data(test)
 
-    if train_mode:
-        return features, labels
-    return features
+# Convert to Hugging Face dataset
+train_dataset = Dataset.from_dict(train_data)
+val_dataset = Dataset.from_dict(val_data)
+test_dataset = Dataset.from_dict(test_data)
 
+# Load pre-trained model and tokenizer
+model_name = "motheecreator/Deepfake-audio-detection"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=2)
 
-# In[ ]:
+# Tokenization function
+def tokenize_function(examples):
+    return tokenizer(examples['features'], padding="max_length", truncation=True)
 
+train_dataset = train_dataset.map(tokenize_function, batched=True)
+val_dataset = val_dataset.map(tokenize_function, batched=True)
+test_dataset = test_dataset.map(tokenize_function, batched=True)
 
-train_mfcc, train_labels = get_mfcc_feature(train, True)
-val_mfcc, val_labels = get_mfcc_feature(val, True)
-
-
-# # Dataset
-
-# In[ ]:
-
-
-class CustomDataset(Dataset):
-    def __init__(self, mfcc, label):
-        self.mfcc = mfcc
-        self.label = label
-
-    def __len__(self):
-        return len(self.mfcc)
-
-    def __getitem__(self, index):
-        if self.label is not None:
-            return self.mfcc[index], self.label[index]
-        return self.mfcc[index]
-
-
-# In[ ]:
-
-
-train_dataset = CustomDataset(train_mfcc, train_labels)
-val_dataset = CustomDataset(val_mfcc, val_labels)
-
-
-# In[ ]:
-
-
-train_loader = DataLoader(
-    train_dataset,
-    batch_size=CONFIG.BATCH_SIZE,
-    shuffle=True
-)
-val_loader = DataLoader(
-    val_dataset,
-    batch_size=CONFIG.BATCH_SIZE,
-    shuffle=False
+# Training arguments
+training_args = TrainingArguments(
+    output_dir="./results",
+    evaluation_strategy="epoch",
+    learning_rate=2e-5,
+    per_device_train_batch_size=8,
+    per_device_eval_batch_size=8,
+    num_train_epochs=3,
+    weight_decay=0.01,
 )
 
-
-# # Define Model
-
-# In[ ]:
-
-
-class MLP(nn.Module):
-    def __init__(self, input_dim=CONFIG.N_MFCC, hidden_dim=128, output_dim=CONFIG.N_CLASSES):
-        super(MLP, self).__init__()
-        self.fc1 = nn.Linear(input_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
-        self.fc3 = nn.Linear(hidden_dim, output_dim)
-        self.relu = nn.ReLU()
-
-    def forward(self, x):
-        x = self.relu(self.fc1(x))
-        x = self.relu(self.fc2(x))
-        x = self.fc3(x)
-        x = torch.sigmoid(x)
-        return x
-
-
-# # Train & Validation
-
-# In[ ]:
-
-
-from sklearn.metrics import roc_auc_score
-
-def train(model, optimizer, train_loader, val_loader, device):
-    model.to(device)
-    criterion = nn.BCELoss().to(device)
-    
-    best_val_score = 0
-    best_model = None
-    
-    for epoch in range(1, CONFIG.N_EPOCHS+1):
-        model.train()
-        train_loss = []
-        for features, labels in tqdm(iter(train_loader)):
-            features = features.float().to(device)
-            labels = labels.float().to(device)
-            
-            optimizer.zero_grad()
-            
-            output = model(features)
-            loss = criterion(output, labels)
-            
-            loss.backward()
-            optimizer.step()
-            
-            train_loss.append(loss.item())
-                    
-        _val_loss, _val_score = validation(model, criterion, val_loader, device)
-        _train_loss = np.mean(train_loss)
-        print(f'Epoch [{epoch}], Train Loss : [{_train_loss:.5f}] Val Loss : [{_val_loss:.5f}] Val AUC : [{_val_score:.5f}]')
-            
-        if best_val_score < _val_score:
-            best_val_score = _val_score
-            best_model = model
-    
-    return best_model
-
-def multiLabel_AUC(y_true, y_scores):
-    auc_scores = []
-    for i in range(y_true.shape[1]):
-        auc = roc_auc_score(y_true[:, i], y_scores[:, i])
-        auc_scores.append(auc)
-    mean_auc_score = np.mean(auc_scores)
-    return mean_auc_score
-    
-def validation(model, criterion, val_loader, device):
-    model.eval()
-    val_loss, all_labels, all_probs = [], [], []
-    
-    with torch.no_grad():
-        for features, labels in tqdm(iter(val_loader)):
-            features = features.float().to(device)
-            labels = labels.float().to(device)
-            
-            probs = model(features)
-            
-            loss = criterion(probs, labels)
-
-            val_loss.append(loss.item())
-
-            all_labels.append(labels.cpu().numpy())
-            all_probs.append(probs.cpu().numpy())
-        
-        _val_loss = np.mean(val_loss)
-
-        all_labels = np.concatenate(all_labels, axis=0)
-        all_probs = np.concatenate(all_probs, axis=0)
-        
-        # Calculate AUC score
-        auc_score = multiLabel_AUC(all_labels, all_probs)
-    
-    return _val_loss, auc_score
-
-
-# ## Run
-
-# In[ ]:
-
-
-model = MLP()
-optimizer = torch.optim.Adam(params = model.parameters(), lr = CONFIG.LR)
-
-infer_model = train(model, optimizer, train_loader, val_loader, device)
-
-
-# ## Inference
-
-# In[ ]:
-
-
-test = pd.read_csv('./test.csv')
-test_mfcc = get_mfcc_feature(test, False)
-test_dataset = CustomDataset(test_mfcc, None)
-test_loader = DataLoader(
-    test_dataset,
-    batch_size=CONFIG.BATCH_SIZE,
-    shuffle=False
+# Trainer
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset=train_dataset,
+    eval_dataset=val_dataset,
+    tokenizer=tokenizer,
 )
 
+# Train the model
+trainer.train()
 
-# In[ ]:
+# Inference
+predictions = trainer.predict(test_dataset)
+preds = np.argmax(predictions.predictions, axis=-1)
 
-
-def inference(model, test_loader, device):
-    model.to(device)
-    model.eval()
-    predictions = []
-    with torch.no_grad():
-        for features in tqdm(iter(test_loader)):
-            features = features.float().to(device)
-            
-            probs = model(features)
-
-            probs  = probs.cpu().detach().numpy()
-            predictions += probs.tolist()
-    return predictions
-
-
-# In[ ]:
-
-
-preds = inference(infer_model, test_loader, device)
-
-
-# ## Submission
-
-# In[ ]:
-
-
+# Create submission file
 submit = pd.read_csv('./sample_submission.csv')
-submit.iloc[:, 1:] = preds
-submit.head()
-
-
-# In[ ]:
-
-
-submit.to_csv('./baseline_submit.csv', index=False)
-
+submit.iloc[:, 1] = preds
+submit.to_csv('./huggingface_submit.csv', index=False)
