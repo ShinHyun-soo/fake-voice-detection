@@ -1,6 +1,6 @@
 # fake-voice-detection
 
-- Hubert 를 MultiLabelSoftMarginLoss 로 Fine-tuning 함.
+- 'facebook/hubert-base-ls960' 를 MultiLabelSoftMarginLoss 로 Fake Voice Detection Multi-Label Classification Downstream Task 에 맞게 Fine-tuning 하였음.
 
 # 환경
 - AMD Ryzen 5 5600 
