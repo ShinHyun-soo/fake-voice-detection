@@ -18,7 +18,7 @@
 - Memory Used : 48.3/58.0GB(32GB + Virtual Memory)
 - RTX 4060TI 16GB(15.5GB 사용)
 
-# 기여
+# Contributors
 - 파이썬초보만
 - hyungyum
 - cm8908
