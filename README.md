@@ -20,6 +20,6 @@
 
 # 기여
 - 파이썬초보만
-- hyungumm
-- Minseop Jung
-- Hyeonjoon-Heo
+- hyungyum
+- cm8908
+- Hyeonjun-Heo
