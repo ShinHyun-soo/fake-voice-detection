@@ -1,4 +1,4 @@
-# fake-voice-detection
+# SW중심대학 디지털 경진대회_SW와 생성AI의 만남 : AI 부문
 
 - 'facebook/hubert-base-ls960' 를 MultiLabelSoftMarginLoss 를 이용하여, Fake Voice Detection Multi-Label Classification Downstream Task 에 맞게 Fine-tuning 하였음.
 
