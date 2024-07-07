@@ -17,3 +17,9 @@
 - CPU : Ryzen 5 5600
 - Memory Used : 48.3/58.0GB(32GB + Virtual Memory)
 - RTX 4060TI 16GB(15.5GB 사용)
+
+# 도움을 준 사람들
+= 파이썬초보만
+- hyungumm
+- Minseop Jung
+- Hyeonjoon-Heo
