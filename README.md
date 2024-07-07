@@ -8,6 +8,6 @@
 - Python 3.10
 - Cuda 12.1
 - PyTorch 2.3.1
-- AMD Ryzen 5 5600 
-- 32GB DDR4 3200Mhz RAM
+- CPU : Ryzen 5 5600
+- Memory Used : 48.3/58.0GB(32GB + Virtual Memory)
 - RTX 4060TI 16GB(15.5GB 사용)
