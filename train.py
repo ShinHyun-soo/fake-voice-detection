@@ -6,6 +6,8 @@ import torch
 import torch.nn as nn
 import pytorch_lightning as pl
 
+from util import *
+
 # Constants
 DATA_DIR = './model'  
 PREPROC_DIR = './preproc'
