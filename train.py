@@ -15,12 +15,10 @@ SUBMISSION_DIR = './submission'
 MODEL_DIR = './model'
 SAMPLING_RATE = 16000
 SEED = 42
-N_FOLD = 5
+N_FOLD = 20
 BATCH_SIZE = 4
 NUM_LABELS = 2
-#AUDIO_MODEL_NAME = 'abhishtagatya/hubert-base-960h-itw-deepfake'
-#AUDIO_MODEL_NAME = 'abhishtagatya/hubert-base-960h-asv19-deepfake'
-AUDIO_MODEL_NAME = 'facebook/hubert-base-ls960'
+AUDIO_MODEL_NAME = 'abhishtagatya/hubert-base-960h-asv19-deepfake'
 
 # Main script
 if __name__ == '__main__':
@@ -31,16 +29,16 @@ if __name__ == '__main__':
     audio_feature_extractor.return_attention_mask = True
 
     # 데이터 로드
-    train_df = pd.read_csv('./train.csv')
+    train_df = pd.read_csv('./shuffled_audio_final.csv')
+    print(f"Train DataFrame shape: {train_df.shape}")
+    
     train_df['path'] = train_df['path'].apply(lambda x: os.path.join(DATA_DIR, x))
 
     # 싱글 라벨을 멀티 라벨로 변환
     train_df['label'] = train_df['label'].apply(
-        lambda x: [1, 0] if x == 0 else (
-            [0, 1] if x == 1 else (
-                [1, 1] if x == 2 else (
-                    [0, 0] if x == 3 else x
-                )
+        lambda x: [0, 1] if x in [1, 4] else (
+            [1, 0] if x in [2, 5] else (
+                [1, 1] if x == 3 else [0, 0]
             )
         )
     )
@@ -50,40 +48,51 @@ if __name__ == '__main__':
     train_labels = np.array(train_df['label'].tolist())
 
     # K 폴드
-    skf = StratifiedKFold(n_splits=N_FOLD, shuffle=True, random_state=SEED)
-    for fold_idx, (train_indices, val_indices) in enumerate(skf.split(train_labels, train_labels.argmax(axis=1))):
+   skf = StratifiedKFold(n_splits=N_FOLD, shuffle=True, random_state=SEED)
+    for fold_idx, (train_indices, val_indices) in enumerate(
+            skf.split(train_labels, train_labels.argmax(axis=1))):
+    
+        if fold_idx < 12 :  # 학습하다 중간에 멈췄을 경우, 이전 폴드는 건너뛰기 위해 사용.
+            continue 
+        
+        print(
+            f"Fold {fold_idx}: Train indices length: {len(train_indices)}, Validation indices length: {len(val_indices)}")
         train_fold_audios = [train_audios[train_index] for train_index in train_indices]
         val_fold_audios = [train_audios[val_index] for val_index in val_indices]
-
+    
         train_fold_labels = train_labels[train_indices]
         val_fold_labels = train_labels[val_indices]
         train_fold_ds = MyDataset(train_fold_audios, audio_feature_extractor, train_fold_labels)
         val_fold_ds = MyDataset(val_fold_audios, audio_feature_extractor, val_fold_labels)
         train_fold_dl = DataLoader(train_fold_ds, batch_size=BATCH_SIZE, collate_fn=collate_fn)
         val_fold_dl = DataLoader(val_fold_ds, batch_size=BATCH_SIZE, collate_fn=collate_fn)
-
+    
         checkpoint_acc_callback = ModelCheckpoint(
-            monitor='val_cs',  # Change to monitor combined_score
+            monitor='val_loss',
             dirpath=MODEL_DIR,
-            filename=f'fold_{fold_idx}' + '_{epoch:02d}-{val_cs:.4f}',
-            save_top_k=1,
-            mode='min'  # Change to 'min' because lower combined_score is better
+            filename=f'fold_{fold_idx}' + '_{epoch:02d}-{val_loss:.4f}-{train_loss:.4f}',
+            save_top_k=5,
+            mode='max'
         )
-
+    
         my_lit_model = MyLitModel(
             audio_model_name=AUDIO_MODEL_NAME,
             num_labels=NUM_LABELS,
             n_layers=1, projector=True, classifier=True, dropout=0.07, lr_decay=0.8
         )
-
+    
         trainer = pl.Trainer(
             accelerator='cuda',
-            max_epochs=10,
-            precision='16-mixed',
+            max_epochs=1,
+            precision='16',
+            val_check_interval=0.1,
             callbacks=[checkpoint_acc_callback],
-            accumulate_grad_batches=2 # batch_size * accumulate_grad_batches = 가 실질적인 배치 사이즈임.
+            accumulate_grad_batches=2
+            # batch_size * accumulate_grad_batches = 가 실질적인 배치 사이즈임. (vram 은 batch_size 기준으로 소모함.)
         )
-
+    
+        print(f"Starting training for fold {fold_idx}...")
         trainer.fit(my_lit_model, train_fold_dl, val_fold_dl)
-
+        print(f"Training completed for fold {fold_idx}.")
+    
         del my_lit_model
