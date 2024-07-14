@@ -8,12 +8,11 @@ from transformers import HubertForSequenceClassification, AutoFeatureExtractor, 
 
 import bitsandbytes as bnb
 
-from sklearn.metrics import roc_auc_score, mean_squared_error
-from sklearn.calibration import calibration_curve
 
-# Utility functions
+# accuracy 계산
 def accuracy(preds, labels):
     return (preds == labels).float().mean()
+
 
 def getAudios(df):
     audios = []
@@ -82,65 +81,11 @@ def collate_fn(samples):
     return batch
 
 
-def expected_calibration_error(y_true, y_prob, n_bins=10):
-    prob_true, prob_pred = calibration_curve(y_true, y_prob, n_bins=n_bins, strategy='uniform')
-    bin_totals = np.histogram(y_prob, bins=np.linspace(0, 1, n_bins + 1), density=False)[0]
-
-    # Filter out empty bins
-    non_empty_bins = bin_totals > 0
-    prob_true = prob_true[:len(non_empty_bins)]
-    prob_pred = prob_pred[:len(non_empty_bins)]
-    bin_weights = bin_totals / len(y_prob)
-    bin_weights = bin_weights[non_empty_bins]
-
-    # Ensure all arrays have the same length
-    min_len = min(len(prob_true), len(prob_pred), len(bin_weights))
-    prob_true = prob_true[:min_len]
-    prob_pred = prob_pred[:min_len]
-    bin_weights = bin_weights[:min_len]
-
-    ece = np.sum(bin_weights * np.abs(prob_true - prob_pred))
-    return ece
-
-def auc_brier_ece(labels, preds):
-    auc_scores = []
-    brier_scores = []
-    ece_scores = []
-
-    for i in range(labels.shape[1]):
-        y_true = labels[:, i]
-        y_prob = preds[:, i]
-
-        # Check if only one class is present
-        if len(np.unique(y_true)) == 1:
-            continue
-
-        # AUC
-        auc = roc_auc_score(y_true, y_prob)
-        auc_scores.append(auc)
-
-        # Brier Score
-        brier = mean_squared_error(y_true, y_prob)
-        brier_scores.append(brier)
-
-        # ECE
-        ece = expected_calibration_error(y_true, y_prob)
-        ece_scores.append(ece)
-
-    mean_auc = np.mean(auc_scores) if auc_scores else 0.0
-    mean_brier = np.mean(brier_scores) if brier_scores else 0.0
-    mean_ece = np.mean(ece_scores) if ece_scores else 0.0
-
-    combined_score = 0.5 * (1 - mean_auc) + 0.25 * mean_brier + 0.25 * mean_ece
-    return combined_score
-
-
-# Lightning Model class
 class MyLitModel(pl.LightningModule):
     def __init__(self, audio_model_name, num_labels, n_layers=1, projector=True, classifier=True, dropout=0.07,
                  lr_decay=1):
         super(MyLitModel, self).__init__()
-        self.config = AutoConfig.from_pretrained(audio_model_name)
+        self.config = AutoConfig.from_pretrained(audio_model_name, num_labels=num_labels)
         self.config.activation_dropout = dropout
         self.config.attention_dropout = dropout
         self.config.final_dropout = dropout
@@ -160,16 +105,11 @@ class MyLitModel(pl.LightningModule):
         labels = batch['label']
 
         logits = self(audio_values, audio_attn_mask)
-        loss = nn.MultiLabelSoftMarginLoss()(logits, labels)
-        # loss = nn.MultiLabelSoftMarginLoss(reduction='none')(logits, labels).sum()
-
-        # 새롭게 추가된 평가지표들
-        # mean_auc, mean_brier, mean_ece, combined_score = auc_brier_ece(labels, preds)
+        loss = nn.BCEWithLogitsLoss()(logits, labels)
 
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
 
         return loss
-
 
     def validation_step(self, batch, batch_idx):
         audio_values = batch['audio_values']
@@ -177,21 +117,10 @@ class MyLitModel(pl.LightningModule):
         labels = batch['label']
 
         logits = self(audio_values, audio_attn_mask)
+        loss = nn.BCEWithLogitsLoss()(logits, labels)
 
-        preds = torch.sigmoid(logits).detach().cpu().numpy()
-        labels = labels.detach().cpu().numpy()
-
-        # 새롭게 추가된 평가지표들
-        val_cs = auc_brier_ece(labels, preds)
-
-        self.log('val_cs', val_cs, on_step=False, on_epoch=True, prog_bar=False, logger=True)
-        #self.log('val_auc', mean_auc, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-        #self.log('val_brier', mean_brier, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-        #self.log('val_ece', mean_ece, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-        #self.log('val_combined_score', combined_score, on_step=False, on_epoch=True, prog_bar=False, logger=True)
-
-        return val_cs
-
+        self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        return loss
 
     def predict_step(self, batch, batch_idx, dataloader_idx=None):
         audio_values = batch['audio_values']
@@ -207,7 +136,7 @@ class MyLitModel(pl.LightningModule):
         layer_decay = self.lr_decay
         weight_decay = 0.01
         llrd_params = self._get_llrd_params(lr=lr, layer_decay=layer_decay, weight_decay=weight_decay)
-        optimizer = bnb.optim.Adam8bit(llrd_params)
+        optimizer = bnb.optim.AdamW(llrd_params)  # optimizer 을 8bit 로 하여 계산 속도 향상 및 vram 사용량 감축
         return optimizer
 
     def _get_llrd_params(self, lr, layer_decay, weight_decay):
