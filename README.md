@@ -1,25 +1,21 @@
-# SW중심대학 디지털 경진대회_생성 AI의 가짜(Fake) 음성 검출 및 탐지
-- 'facebook/hubert-base-ls960' Pre-trained 모델을 MultiLabelSoftMarginLoss 를 이용하여, Multi-Label Classification Task 에 맞게 Fine-tuning 하였음.
-- 'abhishtagatya/hubert-base-960h-itw-deepfake' 와 같이 downstream 모델 재학습시, 매우 불안정한 모습을 보였음.
+# SW중심대학 경진 대회 / 가짜 음성 검출 및 탐지
+5초 분량의 입력 오디오 샘플에서 영어 음성의 진짜(Real) 사람의 목소리와 생성 AI의 가짜(Fake) 사람의 목소리를 동시에 검출해내는 AI 모델 개발
 
-# 평가 지표
-- 0.5 × (1 − AUC) + 0.25 × Brier + 0.25 × ECE
-  - AUC(Area Under the Curve)
-  - Brier Score
-  - ECE(Expected Calibration Error)
+### 1. 데이터 가공
+- 학습 데이터 (단일 음성 데이터)
+- 테스트 데이터 (합성 음성 데이터) - Unseen data, 학습에 사용할 수 없음.
+- 데이터 재구축
+- label -> [fake, real]
+- 1 -> [0, 1] : 1명의 진짜 목소리만 존재 / 순수 학습 셋 에서 추출
+- 2 -> [1, 0] : 1명의 가짜 목소리만 존재 / 순수 학습 셋 에서 추출
+- 3 -> [1, 1] : 1명의 진짜 목소리와 1명의 가짜 목소리가 존재 / 0과 1을 랜덤으로 뽑아 긴 음성 길이에 맞게 짧은 음성에 제로 패딩을 삽입한 후 합성함.
+- 4 -> [0, 1] :  2명의 진짜 목소리가 존재  / 1을 랜덤으로 뽑고 위와 동일함.
+- 5 -> [1, 0] : 2명의 가짜 목소리가 존재 / 0을 랜덤으로 뽑고 위와 동일함.
+- 6 -> [0, 0] : 아예 목소리가 없는 경우 / (사인파 등을 이용하여 랜덤 오디오 생성)
+- ![image](https://github.com/user-attachments/assets/ca82be1b-80d5-4b04-9cf3-7806b6cd5cb6)
 
+### 2. 모델 학습
+- Hubert 를 avspoof 데이터 셋으로 미세 조정한 사전 학습 모델을 데이콘 데이터셋에 맞게 재학습 하였음.
 
-# 실행 환경
-- Windows 11
-- Python 3.10
-- Cuda 12.1
-- PyTorch 2.3.1
-- CPU : Ryzen 5 5600
-- Memory Used : 48.3/58.0GB(32GB + Virtual Memory)
-- RTX 4060TI 16GB(15.5GB 사용)
-
-# Contributors
-- 파이썬초보만
-- hyungyum
-- cm8908
-- Hyeonjun-Heo
+### 3. 회고
+제출 횟수로만 따지면 우리 팀이 상위권인 반면에 성적은 그렇지 않아 아쉽다.
