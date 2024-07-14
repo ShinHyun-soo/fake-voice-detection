@@ -17,6 +17,18 @@ import bitsandbytes as bnb
 
 from util import *
 
+# Constants
+DATA_DIR = ''  # Adjust this path as necessary
+PREPROC_DIR = './preproc'
+SUBMISSION_DIR = './submission'
+MODEL_DIR = './model'
+SAMPLING_RATE = 16000
+SEED = 42
+N_FOLD = 20
+BATCH_SIZE = 8
+NUM_LABELS = 2
+AUDIO_MODEL_NAME = 'abhishtagatya/hubert-base-960h-asv19-deepfake'
+
 # Main script
 if __name__ == '__main__':
     seed_everything(SEED)
