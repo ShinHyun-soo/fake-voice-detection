@@ -9,15 +9,11 @@ import pytorch_lightning as pl
 from tqdm.auto import tqdm
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Dataset, DataLoader
-from sklearn.model_selection import StratifiedKFold
 from pytorch_lightning import seed_everything
-from pytorch_lightning.callbacks import ModelCheckpoint
 from transformers import HubertForSequenceClassification, AutoFeatureExtractor, AutoConfig
-
+from torch.optim import AdamW
 import bitsandbytes as bnb
 
-from sklearn.metrics import roc_auc_score, mean_squared_error
-from sklearn.calibration import calibration_curve
 
 from util import *
 
@@ -44,7 +40,7 @@ if __name__ == '__main__':
     test_preds = []
     trainer = pl.Trainer(
         accelerator='cuda',
-        precision='16-mixed',
+        precision='16',
     )
     
     for pretrained_model_path in pretrained_models:
