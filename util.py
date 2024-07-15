@@ -1,15 +1,4 @@
-from tqdm.auto import tqdm
-from torch.nn.utils.rnn import pad_sequence
-from torch.utils.data import Dataset, DataLoader
-from sklearn.model_selection import StratifiedKFold
-from pytorch_lightning import seed_everything
-from pytorch_lightning.callbacks import ModelCheckpoint
-from transformers import HubertForSequenceClassification, AutoFeatureExtractor, AutoConfig
-
-import bitsandbytes as bnb
-
-
-# accuracy 계산
+# Utility functions
 def accuracy(preds, labels):
     return (preds == labels).float().mean()
 
@@ -81,6 +70,51 @@ def collate_fn(samples):
     return batch
 
 
+def expected_calibration_error(y_true, y_prob, n_bins=10):
+    prob_true, prob_pred = calibration_curve(y_true, y_prob, n_bins=n_bins, strategy='uniform')
+    bin_totals = np.histogram(y_prob, bins=np.linspace(0, 1, n_bins + 1), density=False)[0]
+    non_empty_bins = bin_totals > 0
+    bin_weights = bin_totals / len(y_prob)
+    bin_weights = bin_weights[non_empty_bins]
+    prob_true = prob_true[:len(bin_weights)]
+    prob_pred = prob_pred[:len(bin_weights)]
+    ece = np.sum(bin_weights * np.abs(prob_true - prob_pred))
+    return ece
+
+
+def auc_brier_ece(labels, preds):
+    auc_scores = []
+    brier_scores = []
+    ece_scores = []
+
+    for i in range(labels.shape[1]):
+        y_true = labels[:, i]
+        y_prob = preds[:, i]
+
+        # AUC
+        try:
+            auc = roc_auc_score(y_true, y_prob)
+        except ValueError:
+            auc = 0.0
+        auc_scores.append(auc)
+
+        # Brier Score
+        brier = mean_squared_error(y_true, y_prob)
+        brier_scores.append(brier)
+
+        # ECE
+        ece = expected_calibration_error(y_true, y_prob)
+        ece_scores.append(ece)
+
+    mean_auc = np.mean(auc_scores)
+    mean_brier = np.mean(brier_scores)
+    mean_ece = np.mean(ece_scores)
+
+    combined_score = 0.5 * (1 - mean_auc) + 0.25 * mean_brier + 0.25 * mean_ece
+    return mean_auc, mean_brier, mean_ece, combined_score
+
+
+# Lightning Model class
 class MyLitModel(pl.LightningModule):
     def __init__(self, audio_model_name, num_labels, n_layers=1, projector=True, classifier=True, dropout=0.07,
                  lr_decay=1):
@@ -105,8 +139,19 @@ class MyLitModel(pl.LightningModule):
         labels = batch['label']
 
         logits = self(audio_values, audio_attn_mask)
-        loss = nn.BCEWithLogitsLoss()(logits, labels)
+        loss = nn.MultiLabelSoftMarginLoss()(logits, labels)
 
+        preds = torch.sigmoid(logits).detach().cpu().numpy()
+        true_labels = labels.detach().cpu().numpy()
+
+        try:
+            # Calculate combined score
+            _, _, _, train_combined_score = auc_brier_ece(true_labels, preds)
+        except ValueError:
+            train_combined_score = 0.0
+
+        # Log combined score
+        self.log('train_combined_score', train_combined_score, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
 
         return loss
@@ -117,9 +162,21 @@ class MyLitModel(pl.LightningModule):
         labels = batch['label']
 
         logits = self(audio_values, audio_attn_mask)
-        loss = nn.BCEWithLogitsLoss()(logits, labels)
+        loss = nn.MultiLabelSoftMarginLoss()(logits, labels)
 
+        preds = torch.sigmoid(logits).detach().cpu().numpy()
+        true_labels = labels.detach().cpu().numpy()
+
+        try:
+            # Calculate combined score
+            _, _, _, val_combined_score = auc_brier_ece(true_labels, preds)
+        except ValueError:
+            val_combined_score = 0.0
+
+        # Log combined score
+        self.log('val_combined_score', val_combined_score, on_step=False, on_epoch=True, prog_bar=True, logger=True)
         self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+
         return loss
 
     def predict_step(self, batch, batch_idx, dataloader_idx=None):
@@ -136,7 +193,7 @@ class MyLitModel(pl.LightningModule):
         layer_decay = self.lr_decay
         weight_decay = 0.01
         llrd_params = self._get_llrd_params(lr=lr, layer_decay=layer_decay, weight_decay=weight_decay)
-        optimizer = bnb.optim.AdamW(llrd_params)  # optimizer 을 8bit 로 하여 계산 속도 향상 및 vram 사용량 감축
+        optimizer = bnb.optim.Adam8bit(llrd_params)
         return optimizer
 
     def _get_llrd_params(self, lr, layer_decay, weight_decay):
