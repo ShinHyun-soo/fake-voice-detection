@@ -17,6 +17,9 @@
 
 ### 2. 모델 학습
 - Hubert 를 avspoof 데이터 셋으로 미세 조정한 사전 학습 모델을 데이콘 데이터셋에 맞게 재학습 하였음.
+- Layer-wise Learning Rate Decay, 레이어에 따라 학습률과 가중치 감쇠를 조절함.
+- Layer Re-initialization, 뒤쪽부터 classifier, projector, top-1 layers 초기화.
+- Longer Training and Frequent Validation
 
 ### 3. 진행 내용
 
