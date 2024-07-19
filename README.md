@@ -1,4 +1,4 @@
-# SW중심대학 경진 대회 / 가짜 음성 검출 및 탐지 (2024-07-01 ~ 2024-07-19)
+# SW중심대학 경진 대회 / 가짜 음성 검출 및 탐지       (2024-07-01 ~ 2024-07-19)
 5초 분량의 입력 오디오 샘플에서 영어 음성의 진짜(Real) 사람의 목소리와 생성 AI의 가짜(Fake) 사람의 목소리를 동시에 검출해내는 AI 모델 개발
 [발표자료](https://docs.google.com/presentation/d/1D2Cz_nm0fy105BGreEO7dVw7jZim1zxT5i_xUdcvVLI/edit?usp=sharing)
 ### 1. 데이터 가공
